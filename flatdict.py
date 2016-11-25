@@ -4,7 +4,6 @@ key/value pair mapping of nested dictionaries.
 """
 __version__ = '1.2.0'
 
-
 class FlatDict(dict):
     """:py:class:`~flatdict.FlatDict` is a dictionary object that allows for
     single level, delimited key/value pair mapping of nested dictionaries.
@@ -15,38 +14,38 @@ class FlatDict(dict):
     """
 
     # The default delimiter value
-    DELIMITER = ':'
+    DELIM_DICT  = ':'
+    DELIM_LIST  = '#'
+    DELIM_TUPLE = '$'
 
-    def __init__(self, value=None, delimiter=None, former_type=dict):
+    def __init__(self, value=None, delimiter=None):
         super(FlatDict, self).__init__()
         self._values = {}
-        self._delimiter = delimiter or self.DELIMITER
-        self.former_type = former_type
+        self._delimiter = delimiter or self.DELIM_DICT
         if isinstance(value, dict):
             for key in value.keys():
                 self.__setitem__(key, value[key])
 
     def __contains__(self, key):
-        if self._delimiter not in key:
+        parent, child, delim = self._key_split(key)
+        if delim is None:
             return key in self._values
-        parent, child = key.split(self._delimiter, 1)
         return parent in self._values and child in self._values[parent]
 
     def __delitem__(self, key):
-        if self._delimiter not in key:
+        parent, child, delim = self._key_split(key)
+        if delim is None:
             del self._values[key]
-        else:
-            parent, child = key.split(self._delimiter, 1)
-            if (parent in self._values and
+        elif (parent in self._values and
                 child in self._values[parent]):
                 del self._values[parent][child]
                 if not self._values[parent]:
                     del self._values[parent]
 
     def __getitem__(self, key):
-        if self._delimiter not in key:
+        parent, child, delim = self._key_split(key)
+        if delim is None:
             return self._values[key]
-        parent, child = key.split(self._delimiter, 1)
         if parent in self._values and child in self._values[parent]:
             return self._values[parent][child]
         else:
@@ -65,17 +64,33 @@ class FlatDict(dict):
             values[key] = self.__getitem__(key)
         return values.__repr__()
 
+    def _key_split(self, key):
+        for idx, c in enumerate(key):
+            if c in [FlatDict.DELIM_DICT, FlatDict.DELIM_LIST, FlatDict.DELIM_TUPLE]:
+                return key[0:idx], key[idx+1:], c
+
+        return None, None, None
+
+
     def __setitem__(self, key, value):
-        former_type = type(value)
-        if isinstance(value, (list, tuple)):
+        if isinstance(value, list):
             value = dict((str(i), v) for (i, v) in enumerate(value))
-        if isinstance(value, dict) and not isinstance(value, FlatDict):
-            value = FlatDict(value, self._delimiter, former_type=former_type)
-        if self._delimiter in key:
-            parent_key, child_key = key.split(self._delimiter, 1)
+            value = FlatDict(value, FlatDict.DELIM_LIST)
+        elif isinstance(value, tuple):
+            value = dict((str(i), v) for (i, v) in enumerate(value))
+            value = FlatDict(value, FlatDict.DELIM_TUPLE)
+        elif isinstance(value, dict) and not isinstance(value, FlatDict):
+            value = FlatDict(value, FlatDict.DELIM_DICT)
+
+        parent_key, child_key, delimiter = self._key_split(key)
+
+        if delimiter:
             if parent_key not in self._values:
-                self._values[parent_key] = FlatDict(delimiter=self._delimiter)
-            parent = self._values.get(parent_key)
+                self._values[parent_key] = FlatDict(delimiter=delimiter)
+            parent = self._values[parent_key]
+            if delimiter != parent._delimiter:
+                raise ValueError('Inconsistent delimiter. Mixed use of {} and {}'.format(delimiter, parent._delimiter))
+
             if not isinstance(parent, FlatDict):
                 raise TypeError(
                     'Top level node is not a FlatDict: {0}'.format(
@@ -90,8 +105,8 @@ class FlatDict(dict):
             values[key] = self.__getitem__(key)
         return values.__str__()
 
-    def _key(self, parent, child):
-        return self._delimiter.join([parent, child])
+    def _key(self, parent, child, delimiter):
+        return delimiter.join([parent, child])
 
     def as_dict(self):
         """Return the flat dictionary as a dictionary.
@@ -103,13 +118,13 @@ class FlatDict(dict):
         for key in self._values.keys():
             value = self._values[key]
             if isinstance(value, FlatDict):
-                if value.former_type == list:
+                if value._delimiter == FlatDict.DELIM_LIST:
                     dict_out[key] = [v for k, v in sorted(value.items())]
                     pass
-                elif value.former_type == tuple:
+                elif value._delimiter == FlatDict.DELIM_TUPLE:
                     dict_out[key] = tuple(v for k, v in sorted(value.items()))
                     pass
-                elif value.former_type == dict:
+                elif value._delimiter == FlatDict.DELIM_DICT:
                     dict_out[key] = value.as_dict()
             else:
                 dict_out[key] = value
@@ -225,10 +240,11 @@ class FlatDict(dict):
         """
         keys = list()
         for key in self._values.keys():
-            if isinstance(self._values[key], FlatDict):
-                child_keys = self._values[key].keys()
+            value = self._values[key]
+            if isinstance(value, FlatDict):
+                child_keys = value.keys()
                 for child in child_keys:
-                    keys.append(self._key(key, child))
+                    keys.append(self._key(key, child, value._delimiter))
             else:
                 keys.append(key)
         return keys
@@ -265,16 +281,6 @@ class FlatDict(dict):
             self.__setitem__(key, default)
         return self.__getitem__(key)
 
-    def set_delimiter(self, delimiter):
-        """Override the default or passed in delimiter with a new value.
-
-        :param str delimiter: The delimiter to use
-
-        """
-        self._delimiter = delimiter
-        for key in self._values.keys():
-            if isinstance(self._values[key], FlatDict):
-                self._values[key].set_delimiter(delimiter)
 
     def update(self, other=None, **kwargs):
         """Update the flat dictionary with the key/value pairs from other,
@@ -304,4 +310,3 @@ class FlatDict(dict):
         for key in self.keys():
             values.append(self.__getitem__(key))
         return values
-
